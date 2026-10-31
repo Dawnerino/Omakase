@@ -1,0 +1,82 @@
+# Public, sanitized ESPHome example for omakase.
+# Hardware: ESP32-WROOM-32, INMP441 mic, MAX98357A amplifier.
+# NOT a dump of the installed firmware; validate your wiring before flashing.
+esphome:
+  name: omakase-voice
+  friendly_name: Omakase Voice
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# I2S pins were recovered from the earlier prototype configuration.
+# Shared BCLK / LRCLK may require hardware- and version-specific testing.
+i2s_audio:
+  - id: audio_bus
+    i2s_bclk_pin: GPIO32
+    i2s_lrclk_pin: GPIO33
+    full_duplex: true
+
+microphone:
+  - platform: i2s_audio
+    id: voice_mic
+    i2s_audio_id: audio_bus
+    i2s_din_pin: GPIO34
+    adc_type: external
+    pdm: false
+    channel: left
+
+speaker:
+  - platform: i2s_audio
+    id: voice_speaker
+    i2s_audio_id: audio_bus
+    i2s_dout_pin: GPIO25
+    dac_type: external
+    channel: mono
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: voice_mic
+    channels: 0
+  models:
+    - model: okay_nabu
+      id: nabu
+  on_wake_word_detected:
+    then:
+      - logger.log: "Okay Nabu detected: starting Assist"
+      - voice_assistant.start:
+          wake_word: !lambda return wake_word;
+
+voice_assistant:
+  id: assist
+  microphone: voice_mic
+  speaker: voice_speaker
+  # On-device detection; don't request a second wake word from Home Assistant.
+  use_wake_word: false
+  on_client_connected:
+    - micro_wake_word.start:
+  on_client_disconnected:
+    - micro_wake_word.stop:
+  on_end:
+    - micro_wake_word.start:
+  on_error:
+    - logger.log:
+        format: "Assist error: %s / %s"
+        args: ['code.c_str()', 'message.c_str()']
+    - micro_wake_word.start:
