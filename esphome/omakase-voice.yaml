@@ -1,6 +1,6 @@
-# Public, sanitized ESPHome example for omakase.
+# Config for espHome
 # Hardware: ESP32-WROOM-32, INMP441 mic, MAX98357A amplifier.
-# NOT a dump of the installed firmware; validate your wiring before flashing.
+# Validate your wiring before flashing.
 esphome:
   name: omakase-voice
   friendly_name: Omakase Voice
