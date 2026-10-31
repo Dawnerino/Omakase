@@ -1,0 +1,14 @@
+# Keep private deployment state out of this portfolio.
+secrets.yaml
+**/secrets.yaml
+.env
+.env.*
+!.env.example
+.storage/
+.esphome/
+*.log
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+.DS_Store
