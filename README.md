@@ -60,6 +60,8 @@ The YAML uses ESPHome's official model reference; the TFLite model is resolved d
 
 ### Strata inference status display
 
+**[View the ESPHome multi-OLED configuration and wiring notes](esphome/strata-status/README.md)** · [YAML source](esphome/strata-status/multi-oled.yaml)
+
 ![ESPHome OLED device displaying Strata inference status](images/esphome_inference_status.jpg)
 
 *Physical ESPHome-driven OLED monitor for Strata, my local AI inference service.*
