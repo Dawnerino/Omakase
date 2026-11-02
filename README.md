@@ -2,7 +2,15 @@
 
 **Self-hosted AI, embedded voice, and home automation.**
 
-Omakase is an independent engineering project connecting locally hosted language models, Home Assistant, ESPHome voice hardware, and physical dashboards. This public repository documents the architecture and shares **sanitized examples**; it is not a copy of the private deployment.
+Omakase is an independent engineering project connecting locally hosted language models, Home Assistant, ESPHome voice hardware, and physical dashboards.
+
+> **Work in progress, always expanding.** Omakase is an ongoing home-lab project. I continually add hardware, services, interfaces, experiments, and improvements as I learn and build. Not every component is finished or production-ready.
+
+### Purpose of this repository
+
+This repository is **not designed for direct cloning or one-click deployment**. My installation depends on custom hardware, private infrastructure, and configuration specific to my environment.
+
+Instead, Omakase is a public engineering notebook: a place to **document and publish workflows, technical solutions, hardware and wiring diagrams, sanitized configuration examples, selected source code, and lessons learned**. The goal is to share reusable approaches and explain how the parts fit together, while keeping private credentials and deployment details out of GitHub.
 
 ## Architecture
 
@@ -50,13 +58,21 @@ The YAML uses ESPHome's official model reference; the TFLite model is resolved d
 - Touch-accessible wall dashboards and experimental ESPHome OLED status visualization
 - Private service networking and automation workflows
 
-### Wall displays and hardware photos
+### Strata inference status display
 
-Photos will be added after review for private network details, location data, account details, and people. Suggested files:
-- `docs/images/wall-overview.jpg`
-- `docs/images/dashboard-main.png`
-- `docs/images/voice-node.jpg`
-- `docs/images/oled-status.jpg`
+**[View the ESPHome multi-OLED configuration and wiring notes](esphome/strata-status/README.md)** · [YAML source](esphome/strata-status/multi-oled.yaml)
+
+![ESPHome OLED device displaying Strata inference status](images/esphome_inference_status.jpg)
+
+*Physical ESPHome-driven OLED monitor for Strata, my local AI inference service.*
+
+This display gives me an at-a-glance view of whether Strata is idle or actively working, **which inference phase it is in** (such as prefill, thinking, or decoding/generation), and **generation speed in tokens per second**. It also visualizes prefill progress. Strata status and throughput are fed through Home Assistant sensors to the embedded display.
+
+The evolving OLED configuration also explores additional pages for workstation and NAS telemetry. This is an example of the kind of hardware integration and interface work documented here, not a standalone plug-and-play product.
+
+### More hardware and dashboard photos
+
+Additional wall-display, voice-node, and dashboard photos will be added as they are documented and checked for sensitive details.
 
 ## Engineering focus
 

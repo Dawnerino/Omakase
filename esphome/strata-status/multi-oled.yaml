@@ -1,0 +1,361 @@
+# Omakase — Strata / home-lab multi-OLED panel
+# DOCUMENTATION EXAMPLE (ESPHome config fragment), not standalone flashable firmware.
+# Merge into an ESPHome node with its own esp32:, esphome:, wifi:, api:, etc.
+# Several Home Assistant entity IDs are installation-specific; TrueNAS entries
+# include explicit placeholders. Validate on your device before flashing.
+
+# Multiplexer upstream I2C bus
+i2c:
+  id: main_i2c
+  sda: GPIO21
+  scl: GPIO22
+  frequency: 400kHz
+  scan: true
+
+tca9548a:
+  - id: oled_mux
+    i2c_id: main_i2c
+    address: 0x70
+    channels:
+      - bus_id: strata_bus
+        channel: 0
+      - bus_id: dashboard_bus
+        channel: 1
+      - bus_id: matrix_bus
+        channel: 2
+
+font:
+  - file: "gfonts://Roboto"
+    id: small_font
+    size: 9
+  - file: "gfonts://Roboto"
+    id: big_font
+    size: 18
+  - file: "gfonts://Roboto Mono"
+    id: tiny_font
+    size: 8
+  - file: "gfonts://Roboto Mono"
+    id: matrix_font
+    size: 8
+
+# Live data from Home Assistant. KEEP confirmed Strata IDs as below.
+# Placeholder IDs don't prevent compiling; they will show -- until corrected.
+sensor:
+  - platform: homeassistant
+    id: strata_prefill
+    entity_id: sensor.powerbench_strata_strata_prefill
+  - platform: homeassistant
+    id: strata_speed
+    entity_id: sensor.powerbench_strata_strata_tokens_per_second
+
+  # PowerBench MQTT exporter (verify resulting IDs)
+  - platform: homeassistant
+    id: pb_gpu
+    entity_id: sensor.powerbench_gpu_utilization
+  - platform: homeassistant
+    id: pb_vram
+    entity_id: sensor.powerbench_vram_usage
+  - platform: homeassistant
+    id: pb_cpu
+    entity_id: sensor.powerbench_cpu_utilization
+  - platform: homeassistant
+    id: pb_ram
+    entity_id: sensor.powerbench_ram_usage
+  - platform: homeassistant
+    id: pb_temp
+    entity_id: sensor.powerbench_gpu_temperature
+
+  # TrueNAS CE: MUST REPLACE both placeholders with actual HA States entity IDs
+  - platform: homeassistant
+    id: tn_cpu
+    entity_id: sensor.replace_truenas_cpu_usage
+  - platform: homeassistant
+    id: tn_ram
+    entity_id: sensor.replace_truenas_ram_usage
+
+  # Vinabench MQTT exporter (verify IDs)
+  - platform: homeassistant
+    id: vb_gpu
+    entity_id: sensor.vinabench_gpu_utilization
+  - platform: homeassistant
+    id: vb_vram
+    entity_id: sensor.vinabench_vram_usage
+  - platform: homeassistant
+    id: vb_cpu
+    entity_id: sensor.vinabench_cpu_utilization
+  - platform: homeassistant
+    id: vb_ram
+    entity_id: sensor.vinabench_ram_usage
+  - platform: homeassistant
+    id: vb_temp
+    entity_id: sensor.vinabench_gpu_temp
+
+text_sensor:
+  - platform: homeassistant
+    id: strata_phase
+    entity_id: sensor.powerbench_strata_strata_phase
+  # Create this helper in HA first. Format: MAIN=67;MEDIA=81;BACKUP=42
+  - platform: homeassistant
+    id: tn_pools
+    entity_id: sensor.truenas_oled_pools
+
+globals:
+  - id: dashboard_page
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+  - id: dashboard_last_switch
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+# GPIO35 is input-only and has NO internal pull-up/down.
+# Wiring used here: GPIO35 -- button -- GND, with a 10k resistor
+# between GPIO35 and 3.3V. The external resistor is essential.
+binary_sensor:
+  - platform: gpio
+    id: dashboard_next_button
+    name: "OLED Dashboard Next"
+    pin:
+      number: GPIO35
+      mode: INPUT
+      inverted: true
+    filters:
+      - delayed_on: 30ms
+      - delayed_off: 30ms
+    on_press:
+      then:
+        - lambda: |-
+            id(dashboard_page) = (id(dashboard_page) + 1) % 3;
+            id(dashboard_last_switch) = millis();
+        - component.update: dashboard_screen
+
+# Every second, check whether ten seconds have elapsed SINCE the
+# last manual or automatic page change. Button presses reset the clock.
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return (uint32_t)(millis() - id(dashboard_last_switch)) >= 10000u;
+          then:
+            - lambda: |-
+                id(dashboard_page) = (id(dashboard_page) + 1) % 3;
+                id(dashboard_last_switch) = millis();
+            - component.update: dashboard_screen
+
+display:
+  # SD0 / SC0: Keep this screen dedicated to Strata.
+  # This is a recreation of the previously discussed smoothing/animation;
+  # you can paste your exact original lambda here to retain its appearance.
+  - platform: ssd1306_i2c
+    id: strata_screen
+    i2c_id: strata_bus
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 100ms
+    lambda: |-
+      static float smooth_progress = 0.0f;
+      static float smooth_speed = 0.0f;
+      static float wave_pos = 0.0f;
+      static uint32_t last_frame = 0;
+      uint32_t now = millis();
+      float dt = last_frame == 0 ? 0.1f : (now - last_frame) / 1000.0f;
+      last_frame = now;
+      dt = std::min(dt, 0.25f);
+
+      std::string phase = id(strata_phase).state;
+      bool prefill = phase == "prefill";
+      bool thinking = phase == "thinking";
+      bool decoding = phase == "decoding" || phase == "generating";
+      bool active = thinking || decoding;
+      float progress = id(strata_prefill).has_state() ? id(strata_prefill).state : 0.0f;
+      float speed = id(strata_speed).has_state() ? id(strata_speed).state : 0.0f;
+      progress = std::max(0.0f, std::min(100.0f, progress));
+      speed = std::max(0.0f, speed);
+      if (active) progress = 100.0f;
+      smooth_progress += (progress - smooth_progress) * (1.0f - expf(-9.0f * dt));
+      smooth_speed += (speed - smooth_speed) * (1.0f - expf(-15.0f * dt));
+      wave_pos += (active ? 1.2f + std::min(smooth_speed, 150.0f) * 0.035f : 0.0f) * dt;
+
+      it.print(0, 0, id(small_font), "STRATA");
+      if (thinking) it.print(72, 0, id(small_font), "THINKING");
+      else if (decoding) it.print(76, 0, id(small_font), "DECODING");
+      else if (prefill) it.print(80, 0, id(small_font), "PREFILL");
+      else it.print(103, 0, id(small_font), "IDLE");
+      it.printf(0, 13, id(big_font), "%.1f", smooth_speed);
+      it.print(70, 21, id(small_font), "tok/s");
+      it.rectangle(0, 38, 128, 11);
+      int width = (int)(124.0f * smooth_progress / 100.0f);
+      width = std::max(0, std::min(124, width));
+      if (width > 0) it.filled_rectangle(2, 40, width, 7);
+      for (int x = width; x < width + 8 && x < 124; x++) {
+        int strength = 8 - (x - width);
+        for (int y = 40; y < 47; y++) {
+          if (((x * 3 + y * 5) % 8) < strength) it.draw_pixel_at(2 + x, y);
+        }
+      }
+      if (prefill) it.printf(0, 53, id(small_font), "PREFILL %.0f%%", smooth_progress);
+      else if (active) {
+        it.print(0, 53, id(small_font), thinking ? "THINKING" : "GENERATING");
+        for (int i = 0; i < 27; i++) {
+          float amplitude = 1.0f + std::min(smooth_speed / 35.0f, 4.0f);
+          int y = 58 + (int)(sinf(wave_pos * 5.0f + i * 0.38f) * amplitude);
+          int x = 86 + (int)(i * 1.5f);
+          if (x < 128 && y >= 50 && y < 64) it.filled_circle(x, y, 1);
+        }
+      } else it.print(0, 53, id(small_font), "WAITING");
+
+  # SD1 / SC1: rotating PowerBench > TrueNAS > Vinabench.
+  # On yellow/blue bicolor OLEDs, yellow is fixed in rows 0-15.
+  # Header uses yellow; statistics occupy the blue area below.
+  - platform: ssd1306_i2c
+    id: dashboard_screen
+    i2c_id: dashboard_bus
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 250ms
+    lambda: |-
+      // Draw a 0-100% horizontal gauge; invalid sensors display --.
+      auto bar = [&](int y, const char *label, bool valid, float value) {
+        it.print(0, y, id(tiny_font), label);
+        // Move only the bars 2px lower (especially on yellow/blue OLEDs).
+        it.rectangle(35, y + 3, 64, 8);
+        if (valid && std::isfinite(value)) {
+          float v = std::max(0.0f, std::min(100.0f, value));
+          int filled = (int)(62.0f * v / 100.0f);
+          if (filled > 0) it.filled_rectangle(36, y + 4, filled, 6);
+          it.printf(103, y, id(tiny_font), "%.0f%%", v);
+        } else it.print(103, y, id(tiny_font), "--");
+      };
+
+      if (id(dashboard_page) == 0) {
+        it.print(0, 0, id(small_font), "POWERBENCH");
+        bar(12, "GPU", id(pb_gpu).has_state(), id(pb_gpu).state);
+        bar(24, "VRAM", id(pb_vram).has_state(), id(pb_vram).state);
+        bar(36, "CPU", id(pb_cpu).has_state(), id(pb_cpu).state);
+        bar(48, "RAM", id(pb_ram).has_state(), id(pb_ram).state);
+        if (id(pb_temp).has_state()) it.printf(76, 0, id(tiny_font), "%.0fC", id(pb_temp).state);
+      } else if (id(dashboard_page) == 1) {
+        it.print(0, 0, id(small_font), "TRUENAS");
+        // Pool data comes from the HA template helper, not directly from
+        // the TrueNAS integration. Show an explicit message if it is missing.
+        const bool pools_available = id(tn_pools).has_state() &&
+          !id(tn_pools).state.empty() &&
+          id(tn_pools).state != "unknown" &&
+          id(tn_pools).state != "unavailable";
+        std::string pools = pools_available ? id(tn_pools).state : "";
+        if (!pools_available) {
+          it.print(0, 20, id(tiny_font), "NO POOL DATA");
+          it.print(0, 31, id(tiny_font), "MAKE HA TEMPLATE");
+        }
+        size_t start = 0;
+        int slot = 0;
+        while (start < pools.size() && slot < 10) {
+          size_t end = pools.find(';', start);
+          std::string item = pools.substr(start,
+              end == std::string::npos ? std::string::npos : end - start);
+          size_t equals = item.find('=');
+          if (equals != std::string::npos) {
+            std::string name = item.substr(0, equals);
+            std::string val = item.substr(equals + 1);
+            if (name.length() > 5) name = name.substr(0, 5);
+            int x = (slot / 5) * 64;
+            int y = 16 + (slot % 5) * 8;
+            if (val == "-1") it.printf(x, y, id(tiny_font), "%s:--", name.c_str());
+            else it.printf(x, y, id(tiny_font), "%s:%s%%", name.c_str(), val.c_str());
+          }
+          slot++;
+          if (end == std::string::npos) break;
+          start = end + 1;
+        }
+        if (id(tn_cpu).has_state()) it.printf(0, 56, id(tiny_font), "CPU %.0f%%", id(tn_cpu).state);
+        else it.print(0, 56, id(tiny_font), "CPU --");
+        if (id(tn_ram).has_state()) it.printf(66, 56, id(tiny_font), "RAM %.0f%%", id(tn_ram).state);
+        else it.print(66, 56, id(tiny_font), "RAM --");
+      } else {
+        it.print(0, 0, id(small_font), "VINABENCH");
+        bar(12, "GPU", id(vb_gpu).has_state(), id(vb_gpu).state);
+        bar(24, "VRAM", id(vb_vram).has_state(), id(vb_vram).state);
+        bar(36, "CPU", id(vb_cpu).has_state(), id(vb_cpu).state);
+        bar(48, "RAM", id(vb_ram).has_state(), id(vb_ram).state);
+        if (id(vb_temp).has_state()) it.printf(81, 0, id(tiny_font), "%.0fC", id(vb_temp).state);
+      }
+
+  # SD2 / SC2: 0.91-inch 128x32 OLED, 270 degrees (reversed from the
+  # previous upside-down 90-degree orientation). Logical: 32 W x 128 H.
+  # Characters move down the LONG axis, much faster than the first version.
+  - platform: ssd1306_i2c
+    id: matrix_screen
+    i2c_id: matrix_bus
+    model: "SSD1306 128x32"
+    address: 0x3C
+    rotation: 270°
+    update_interval: 40ms
+    lambda: |-
+      const std::string phase = id(strata_phase).state;
+      const bool active = (phase == "thinking" ||
+                           phase == "decoding" ||
+                           phase == "generating");
+
+      // When Strata isn't generating, the display stays BLACK.
+      static bool was_active = false;
+      static uint32_t previous_ms = 0;
+      static float heads[4] = {22.0f, 61.0f, 101.0f, 157.0f};
+      if (!active) {
+        was_active = false;
+        previous_ms = millis();
+        return;
+      }
+
+      uint32_t now = millis();
+      if (!was_active) {
+        heads[0] = 22.0f;
+        heads[1] = 61.0f;
+        heads[2] = 101.0f;
+        heads[3] = 157.0f;
+        previous_ms = now;
+        was_active = true;
+      }
+      float dt = (now - previous_ms) / 1000.0f;
+      previous_ms = now;
+      if (dt > 0.20f) dt = 0.20f;
+
+      // Four independent streams travel DOWN the 128-pixel long axis.
+      // 95-145 pixels/sec crosses the entire panel in roughly 1 second.
+      // Units: physical pixels per second. Increase these to go faster.
+      const float speeds[4] = {95.0f, 130.0f, 110.0f, 145.0f};
+      const char glyphs[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%+=<>";
+      const uint32_t glyph_count = sizeof(glyphs) - 1;
+
+      for (int col = 0; col < 4; col++) {
+        heads[col] += speeds[col] * dt;
+        if (heads[col] > 222.0f) heads[col] = -16.0f;
+
+        const int x = col * 8;
+        const int cell = (int)(heads[col] + 512.0f) / 9;
+
+        // Up to 11 characters in a descending trail. The glyph identity
+        // changes ONLY after about 9 pixels of travel, not every frame.
+        for (int trail = 0; trail < 11; trail++) {
+          const int y = (int)heads[col] - trail * 9;
+          if (y <= -9 || y >= 128) continue;
+
+          uint32_t h = (uint32_t)(cell - trail + 4096);
+          h = (h ^ (uint32_t)(col * 0x9e3779b9u)) * 1664525u;
+          h ^= h >> 11;
+          char glyph[2] = {glyphs[(h >> 14) % glyph_count], '\0'};
+
+          // Monochrome cannot fade naturally, so thin the last few glyphs.
+          if (trail >= 7 && ((h >> 6) & 1u)) continue;
+          it.print(x, y, id(matrix_font), glyph);
+        }
+
+        // Solid leading head, like a bright falling cursor.
+        const int hy = (int)heads[col] + 1;
+        if (hy >= 0 && hy < 128) {
+          it.filled_rectangle(x + 1, hy, 5, 2);
+        }
+      }
